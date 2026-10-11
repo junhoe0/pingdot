@@ -48,6 +48,7 @@
   #status{min-height:1.4em;margin:.8em 0 0;color:var(--muted)} #status.err{color:var(--err)}
   .now{margin-top:1em;padding:.8em;border-radius:8px;background:#000;color:#00c8ff;
        font-family:monospace;font-size:1.1em;word-break:break-word}
+  .reason{font-size:.85em;color:var(--err);margin:.2em 0 0}
   small{color:var(--muted)} [hidden]{display:none!important}
 </style></head><body>
 <main>
@@ -93,9 +94,10 @@
     <p style="margin:.8em 0 0;text-align:right"><button type="button" class="link" id="logout">Sign out</button></p>
   </form>
 
+  <p id="reason" class="reason" hidden></p>
   <p id="status" role="status"></p>
   <div class="now" id="now" hidden></div>
-  <p><small>Long text scrolls and loops. Letters, numbers and basic symbols only.</small></p>
+  <p><small>Long text scrolls and loops. Chinese, emoji and other symbols work too.</small></p>
 </main>
 <script>
 const $ = id => document.getElementById(id);
@@ -107,6 +109,33 @@ PRESETS.forEach(c => {
   b.addEventListener('click', () => { $('color').value = c; });
   $('swatches').insertBefore(b, $('color'));
 });
+
+// Draws the text with the browser's own fonts (Chinese, emoji, ...) into a 16-pixel-high picture
+// and returns it as base64 RGB565, the format the matrix wants. Emoji keep their own colours.
+const MAX_W = 800;
+function renderBitmap(text, color) {
+  const H = 16;
+  const font = '14px "Noto Sans CJK SC","Noto Sans SC","PingFang SC","Microsoft YaHei","WenQuanYi Zen Hei",' +
+               '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",system-ui,sans-serif';
+  const c = document.createElement('canvas');
+  const ctx = c.getContext('2d', {willReadFrequently: true});
+  ctx.font = font;
+  const w = Math.ceil(ctx.measureText(text).width) + 2;
+  if (w > MAX_W) return null;
+  c.width = w; c.height = H;
+  ctx.font = font; ctx.textBaseline = 'middle'; ctx.fillStyle = color;
+  ctx.fillText(text, 1, H / 2 + 1);
+  const d = ctx.getImageData(0, 0, w, H).data;
+  const out = new Uint8Array(w * H * 2);
+  for (let i = 0, o = 0; i < d.length; i += 4, o += 2) {
+    const a = Math.min(1, d[i + 3] / 255 * 1.5);           // thicken the soft edges a little for the LEDs
+    const r = Math.round(d[i] * a) >> 3, g = Math.round(d[i + 1] * a) >> 2, b = Math.round(d[i + 2] * a) >> 3;
+    const v = (r << 11) | (g << 5) | b;
+    out[o] = v >> 8; out[o + 1] = v & 255;
+  }
+  let bin = ''; for (let i = 0; i < out.length; i += 8192) bin += String.fromCharCode.apply(null, out.subarray(i, i + 8192));
+  return {width: w, bitmap: btoa(bin)};
+}
 
 function setStatus(msg, err) { $('status').textContent = msg || ''; $('status').className = err ? 'err' : ''; }
 function showApp(loggedIn) {
@@ -140,7 +169,8 @@ async function refresh() {
     if (status === 401) { showApp(false); return; }
     $('device').classList.toggle('on', !!m.online);
     $('deviceText').textContent = m.online ? 'Device online' : 'Device offline';
-    $('device').title = m.online ? '' : (m.reason || '');
+    $('reason').hidden = !!m.online || !m.reason;
+    $('reason').textContent = m.reason ? 'Why: ' + m.reason : '';
     if (m.online && m.text) showNow(m.text, m.color);
   } catch (e) {}
 }
@@ -159,8 +189,11 @@ $('logout').addEventListener('click', async () => { await api('DELETE', '/api/au
 
 $('send').addEventListener('submit', async e => {
   e.preventDefault(); setStatus('Sending...');
+  const img = renderBitmap($('text').value.trim(), $('color').value);
+  if (!img) { setStatus('Message too long for the matrix', true); return; }
   const r = await api('POST', '/api/message', {
-    text: $('text').value, color: $('color').value, song: Number($('song').value)
+    text: $('text').value, color: $('color').value, song: Number($('song').value),
+    width: img.width, bitmap: img.bitmap
   });
   if (r.ok) { $('text').value = ''; setStatus('Sent!'); showNow(r.data.text, r.data.color); }
   else if (r.status === 401) { setStatus('Please sign in again.', true); showApp(false); }

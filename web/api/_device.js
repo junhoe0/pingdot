@@ -5,15 +5,12 @@ const MAX_TEXT_LEN = 100;
 const SONG_COUNT = 6;            // 0 = none; keep in sync with the firmware and index.html
 const DEFAULT_COLOR = '#00c8ff';
 
-// Printable ASCII only (the matrix font has nothing else), same as the firmware.
+// Any Unicode (Chinese, emoji, ...) is fine now: the browser turns the text into a picture.
+// Control characters are dropped; at most MAX_TEXT_LEN characters (code points).
 function clean(t) {
-  let out = '';
-  for (const ch of String(t || '')) {
-    if (out.length >= MAX_TEXT_LEN) break;
-    const c = ch.charCodeAt(0);
-    out += c >= 32 && c <= 126 ? ch : '?';
-  }
-  return out.trim();
+  return Array.from(String(t || ''))
+    .filter(ch => { const c = ch.codePointAt(0); return c >= 32 && c !== 127 && !(c >= 0x80 && c < 0xa0); })
+    .slice(0, MAX_TEXT_LEN).join('').trim();
 }
 
 function cleanColor(c) {
@@ -30,7 +27,7 @@ function cleanSong(s) {
 //   2. us -> ESP32:  [2-byte length][12-byte IV | AES-256-GCM ciphertext | 16-byte tag]
 //                    key = DEVICE_KEY, AAD = challenge          (so a recorded request can't be replayed)
 //   3. ESP32 -> us:  same framing, AAD = challenge + "R"
-// Plaintext requests: "M\n<RRGGBB>\n<song>\n<text>" (show message) or "S" (status).
+// Plaintext requests: "S" (status) or a binary "B" message, see message.js.
 function callDevice(plaintext) {
   return new Promise((resolve, reject) => {
     const keyHex = process.env.DEVICE_KEY || '';
@@ -58,7 +55,7 @@ function callDevice(plaintext) {
         const iv = crypto.randomBytes(12);
         const c = crypto.createCipheriv('aes-256-gcm', key, iv);
         c.setAAD(challenge);
-        const ct = Buffer.concat([c.update(plaintext, 'utf8'), c.final()]);
+        const ct = Buffer.concat([c.update(Buffer.isBuffer(plaintext) ? plaintext : Buffer.from(plaintext, 'utf8')), c.final()]);
         const frame = Buffer.concat([iv, ct, c.getAuthTag()]);
         const len = Buffer.alloc(2);
         len.writeUInt16BE(frame.length);
@@ -82,4 +79,4 @@ function callDevice(plaintext) {
   });
 }
 
-module.exports = { callDevice, clean, cleanColor, cleanSong };
+module.exports = { callDevice, clean, cleanColor, cleanSong, MAX_BITMAP_W: 800 };

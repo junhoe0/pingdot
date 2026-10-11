@@ -12,4 +12,4 @@ straight to the ESP32 over an encrypted TCP socket (port-forwarded on your route
 `ESP32 -> site`: 16 random bytes (challenge, new per connection).
 `site -> ESP32`: `[2-byte length][12-byte IV | AES-256-GCM ciphertext | 16-byte tag]`, key = `DEVICE_KEY`, AAD = challenge.
 `ESP32 -> site`: same framing, AAD = challenge + `R`.
-Requests: `M\n<RRGGBB>\n<song>\n<text>` (show) or `S` (status). The fresh challenge makes recorded requests useless.
+Requests: `S` (status) or `B` (a message: song, width, colour, UTF-8 text and a 16-pixel-high RGB565 picture). The browser draws the text itself, so any language and emoji work. The fresh challenge makes recorded requests useless.

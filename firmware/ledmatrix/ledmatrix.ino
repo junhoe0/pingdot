@@ -48,6 +48,10 @@ const int scrollInterval = 60;   // ms per pixel step (lower = faster)
 bool wasConnected = false;
 bool serverStarted = false;
 String currentColorHex = "00c8ff";
+String statusText = "Starting...";   // what the website shows as "now showing" (UTF-8)
+uint16_t* bmp = nullptr;             // picture sent by the website (RGB565, row-major, bmpW x 16)
+int bmpW = 0;
+bool bitmapMode = false;
 int authFailures = 0;
 unsigned long lockedUntil = 0;
 
@@ -57,7 +61,8 @@ bool clientActive = false;
 unsigned long clientSince = 0;
 uint8_t key[32];
 uint8_t challenge[16];
-const size_t MAX_FRAME = 256;
+const int MAX_BITMAP_W = 800;                         // pixels; keep equal to MAX_BITMAP_W on the website
+const size_t MAX_FRAME = 12 + 9 + 400 + (size_t)MAX_BITMAP_W * 16 * 2 + 16;
 uint8_t rx[2 + MAX_FRAME];
 size_t rxLen = 0;
 
@@ -123,8 +128,16 @@ void updateSong() {
 
 void drawText() {
   matrix.fillScreen(0);
-  matrix.setCursor(xPos, 4);     // y=4 centers 8px text on 16 rows
-  matrix.print(currentText);
+  if (bitmapMode) {
+    for (int x = 0; x < MATRIX_W; x++) {              // only the visible columns
+      int sx = x - xPos;
+      if (sx < 0 || sx >= bmpW) continue;
+      for (int y = 0; y < 16; y++) matrix.drawPixel(x, y, bmp[y * bmpW + sx]);
+    }
+  } else {
+    matrix.setCursor(xPos, 4);   // y=4 centers 8px text on 16 rows
+    matrix.print(currentText);
+  }
   matrix.show();
 }
 
@@ -139,10 +152,30 @@ bool setText(String t, uint16_t color) {
   if (clean.length() == 0) return false;
 
   currentText = clean;
+  statusText = clean;
+  bitmapMode = false;
+  free(bmp);
+  bmp = nullptr;
   matrix.setTextColor(color);
   textWidth = currentText.length() * 6 - 1;   // 5px glyph + 1px spacing
   scrolling = textWidth > MATRIX_W;
   xPos = scrolling ? MATRIX_W : (MATRIX_W - textWidth) / 2;
+  drawText();
+  return true;
+}
+
+// Shows a picture (big-endian RGB565, row-major, w x 16): static + centered if it fits, else scrolls.
+bool setBitmap(const uint8_t* px, int w) {
+  uint16_t* nb = (uint16_t*)malloc((size_t)w * 16 * sizeof(uint16_t));
+  if (!nb) return false;
+  for (int i = 0; i < w * 16; i++) nb[i] = ((uint16_t)px[2 * i] << 8) | px[2 * i + 1];
+  free(bmp);
+  bmp = nb;
+  bmpW = w;
+  bitmapMode = true;
+  textWidth = w;
+  scrolling = w > MATRIX_W;
+  xPos = scrolling ? MATRIX_W : (MATRIX_W - w) / 2;
   drawText();
   return true;
 }
@@ -168,7 +201,9 @@ void updateScrolling() {
 //   site -> ESP32 : [2-byte length][12-byte IV | AES-256-GCM ciphertext | 16-byte tag]
 //                   key = DEVICE_KEY, AAD = challenge  (so recorded requests can't be replayed)
 //   ESP32 -> site : same framing, AAD = challenge + "R"
-// Requests: "M\n<RRGGBB>\n<song>\n<text>" shows a message, "S" asks for the current status.
+// Requests: "S" = status, or a binary "B" message:
+//   'B' | song(1) | width(2, BE) | textLen(2, BE) | R G B (3) | text (UTF-8) | pixels (width*16*2)
+// The website draws the text itself (any language, emoji) and sends it as a picture.
 
 bool parseKey() {
   if (strlen(DEVICE_KEY) != 64) return false;
@@ -193,20 +228,22 @@ void authFailed() {
 }
 
 // Returns the reply text for a decrypted request.
-String handleRequest(const String& req) {
-  if (req == "S") return currentColorHex + "\n" + currentText;
+String handleRequest(const uint8_t* p, size_t len) {
+  if (len == 1 && p[0] == 'S') return currentColorHex + "\n" + statusText;
 
-  if (req.startsWith("M\n") && req.length() > 9 && req[8] == '\n') {
-    String hex = req.substring(2, 8);
-    int b = req.indexOf('\n', 9);
-    if (b < 0) return "ERR";
-    int song = req.substring(9, b).toInt();
-    String text = req.substring(b + 1);
+  if (len >= 9 && p[0] == 'B') {
+    int song = p[1];
+    int w = (p[2] << 8) | p[3];
+    size_t t = ((size_t)p[4] << 8) | p[5];
+    if (w < 1 || w > MAX_BITMAP_W || t > 400 || 9 + t + (size_t)w * 32 != len) return "ERR";
+    const uint8_t* txt = p + 9;
+    if (!setBitmap(txt + t, w)) return "ERR";
 
-    long rgb = strtol(hex.c_str(), nullptr, 16);
-    uint16_t color = matrix.Color((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
-    if (!setText(text, color)) return "ERR";
+    char hex[7];
+    snprintf(hex, sizeof(hex), "%02x%02x%02x", p[6], p[7], p[8]);
     currentColorHex = hex;
+    statusText = "";
+    statusText.concat((const char*)txt, t);
     startSong(song);
     return "OK";
   }
@@ -214,8 +251,10 @@ String handleRequest(const String& req) {
 }
 
 void sendReply(const String& reply) {
-  uint8_t out[2 + 12 + 160 + 16];
-  size_t n = min((size_t)reply.length(), (size_t)160);
+  size_t n = reply.length();
+  size_t frameLen = 12 + n + 16;
+  uint8_t* out = (uint8_t*)malloc(2 + frameLen);
+  if (!out) return;
   uint8_t aad[17];
   memcpy(aad, challenge, 16);
   aad[16] = 'R';
@@ -229,27 +268,29 @@ void sendReply(const String& reply) {
                             (const uint8_t*)reply.c_str(), frame + 12, 16, frame + 12 + n);
   mbedtls_gcm_free(&g);
 
-  size_t frameLen = 12 + n + 16;
   out[0] = frameLen >> 8;
   out[1] = frameLen & 0xFF;
   client.write(out, 2 + frameLen);
   client.flush();
+  free(out);
 }
 
 void processFrame(const uint8_t* f, size_t n) {
   size_t ptLen = n - 12 - 16;
-  uint8_t pt[MAX_FRAME];
+  uint8_t* pt = (uint8_t*)malloc(ptLen + 1);
+  if (!pt) { closeClient(); return; }
   mbedtls_gcm_context g;
   mbedtls_gcm_init(&g);
   mbedtls_gcm_setkey(&g, MBEDTLS_CIPHER_ID_AES, key, 256);
   int ret = mbedtls_gcm_auth_decrypt(&g, ptLen, f, 12, challenge, sizeof(challenge),
                                      f + n - 16, 16, f + 12, pt);
   mbedtls_gcm_free(&g);
-  if (ret != 0) { authFailed(); return; }                       // wrong key or tampered/replayed
+  if (ret != 0) { free(pt); authFailed(); return; }             // wrong key or tampered/replayed
 
   authFailures = 0;
-  pt[ptLen] = 0;
-  sendReply(handleRequest(String((const char*)pt)));
+  String reply = handleRequest(pt, ptLen);
+  free(pt);
+  sendReply(reply);
   closeClient();
 }
 
@@ -272,13 +313,17 @@ void serviceNetwork() {
   }
   if (!clientActive) return;
 
-  if (millis() - clientSince > 5000 || !client.connected()) { closeClient(); return; }
+  if (millis() - clientSince > 10000 || !client.connected()) { closeClient(); return; }
 
-  while (client.available() && rxLen < sizeof(rx)) rx[rxLen++] = client.read();
+  int avail = client.available();
+  if (avail > 0 && rxLen < sizeof(rx)) {
+    int r = client.read(rx + rxLen, min((size_t)avail, sizeof(rx) - rxLen));
+    if (r > 0) rxLen += r;
+  }
   if (rxLen < 2) return;
 
   size_t n = ((size_t)rx[0] << 8) | rx[1];
-  if (n < 12 + 16 + 1 || n > MAX_FRAME - 1) { authFailed(); return; }   // malformed
+  if (n < 12 + 16 + 1 || n > MAX_FRAME) { authFailed(); return; }   // malformed
   if (rxLen >= 2 + n) processFrame(rx + 2, n);
 }
 
@@ -303,7 +348,7 @@ void setup() {
 
   if (!parseKey()) {
     Serial.println("DEVICE_KEY must be exactly 64 hex characters");
-    setText("BAD KEY", matrix.Color(255, 0, 0));
+    setText("KEY?", matrix.Color(255, 0, 0));   // short so it fits without scrolling
     while (true) delay(1000);
   }
 }
