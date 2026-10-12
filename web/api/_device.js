@@ -2,7 +2,7 @@ const net = require('net');
 const crypto = require('crypto');
 
 const MAX_TEXT_LEN = 100;
-const SONG_COUNT = 6;            // 0 = none; keep in sync with the firmware and index.html
+const SONG_COUNT = 8;            // 0 = none; keep in sync with the firmware and index.html
 const DEFAULT_COLOR = '#00c8ff';
 
 // Any Unicode (Chinese, emoji, ...) is fine now: the browser turns the text into a picture.

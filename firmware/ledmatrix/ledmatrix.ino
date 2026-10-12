@@ -70,23 +70,39 @@ size_t rxLen = 0;
 
 struct Note { uint16_t freq; uint16_t ms; };   // freq 0 = rest
 
-const Note SONG_BEEP[]     = { {1200, 80} };
-const Note SONG_DINGDONG[] = { {659, 450}, {523, 700} };
+const Note SONG_BEEP[]     = { {2093, 80} }; // C7
+const Note SONG_DINGDONG[] = { {1318, 450}, {1046, 700} }; // E6, C6
 const Note SONG_TWINKLE[]  = {
-  {523,300},{523,300},{784,300},{784,300},{880,300},{880,300},{784,600},
-  {698,300},{698,300},{659,300},{659,300},{587,300},{587,300},{523,600} };
-const Note SONG_ODE[]      = {
-  {659,300},{659,300},{698,300},{784,300},{784,300},{698,300},{659,300},{587,300},
-  {523,300},{523,300},{587,300},{659,300},{659,450},{587,150},{587,600} };
-const Note SONG_BIRTHDAY[] = {
-  {784,300},{784,150},{880,450},{784,450},{1047,450},{988,900},
-  {784,300},{784,150},{880,450},{784,450},{1175,450},{1047,900} };
+  {1046,300},{1046,300},{1568,300},{1568,300},{1760,300},{1760,300},{1568,600},
+  {1397,300},{1397,300},{1318,300},{1318,300},{1175,300},{1175,300},{1046,600} };
+
+// Super Mario Bros. Main Theme (Intro)
+const Note SONG_MARIO[] = {
+  {2637, 100}, {0, 50}, {2637, 100}, {0, 150}, {2637, 100}, {0, 150}, {2093, 100}, {2637, 100}, {0, 150}, {3136, 200}, {0, 300}, {1568, 200}
+};
+
+// Star Wars - Imperial March
+const Note SONG_IMPERIAL[] = {
+  {880, 500}, {880, 500}, {880, 500}, {698, 350}, {1046, 150}, {880, 500}, {698, 350}, {1046, 150}, {880, 1000}
+};
+
+// Pac-Man Game Start Intro
+const Note SONG_PACMAN[] = {
+  {988, 120}, {1975, 120}, {1480, 120}, {1245, 120}, {1975, 60}, {1480, 120}, {1245, 240},
+  {1046, 120}, {2093, 120}, {1568, 120}, {1318, 120}, {2093, 60}, {1568, 120}, {1318, 240}
+};
+
+// Retro Game "Level Up" Sound Effect
+const Note SONG_LEVEL_UP[] = {
+  {1046, 100}, {1318, 100}, {1568, 100}, {2093, 300}
+};
 
 struct Song { const Note* notes; int len; };
 #define SONG(a) { a, (int)(sizeof(a) / sizeof(a[0])) }
 const Song SONGS[] = {          // index 0 = none
   { nullptr, 0 },
-  SONG(SONG_BEEP), SONG(SONG_DINGDONG), SONG(SONG_TWINKLE), SONG(SONG_ODE), SONG(SONG_BIRTHDAY)
+  SONG(SONG_BEEP), SONG(SONG_DINGDONG), SONG(SONG_TWINKLE), SONG(SONG_MARIO),
+  SONG(SONG_IMPERIAL), SONG(SONG_PACMAN), SONG(SONG_LEVEL_UP)
 };
 const int SONG_COUNT = sizeof(SONGS) / sizeof(SONGS[0]);
 
